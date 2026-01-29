@@ -1,29 +1,36 @@
 export type CyclePhase =
-	| "menstrual"
-	| "follicular"
-	| "ovulation"
-	| "luteal";
+    | "menstrual"
+    | "follicular"
+    | "ovulation"
+    | "luteal";
 
 export type Cycle = {
-	cycleLength: number;
-	periodLength: number;
-	lastPeriodStart: string | null;
+    cycleLength: number;
+    periodLength: number;
+    lastPeriodStart: string | null;
 };
 
 export type Symptom =
-	| "cramps"
-	| "headache"
-	| "mood"
-	| "energy"
-	| "bloating"
-	| "sleep";
+    | "cramps"
+    | "backPain"
+    | "headache"
+    | "bloating"
+    | "breastTenderness"
+    | "fatigue"
+    | "irritability"
+    | "lowFocus";
+
+export type Mood = "bad" | "neutral" | "good";
+
+export type BleedingIntensity = "light" | "medium" | "heavy";
 
 export type PeriodLog = {
-	id: string;
-	userId?: string | null;
-	startDate: string;
-	endDate?: string | null;
-	symptoms?: Symptom[] | null;
-	notes?: string | null;
-	createdAt?: string | null;
+    id: string;
+    userId?: string | null;
+    date: string; // NEW: single date field instead of startDate/endDate
+    symptoms?: string[] | null;
+    bleedingIntensity?: BleedingIntensity | null;
+    mood?: Mood | null;
+    notes?: string | null;
+    createdAt?: string | null;
 };

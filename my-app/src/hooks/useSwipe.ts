@@ -1,124 +1,121 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-
 import type { Cycle, CyclePhase, PeriodLog, Symptom } from "../types/feed";
+import {
+    DEFAULT_CYCLE_LENGTH,
+    DEFAULT_PERIOD_LENGTH,
+    daysBetween,
+    toDate,
+    getCyclePhaseKey,
+    calculateCycleData,
+    analyzeCycles,
+} from "../lib/predictions";
 
 const defaultCycle: Cycle = {
-	cycleLength: 28,
-	periodLength: 5,
-	lastPeriodStart: null,
+    cycleLength: DEFAULT_CYCLE_LENGTH,
+    periodLength: DEFAULT_PERIOD_LENGTH,
+    lastPeriodStart: null,
 };
 
-const getCyclePhase = (
-	cycleDay: number,
-	cycleLength: number,
-	periodLength: number
-): CyclePhase => {
-	if (cycleDay <= periodLength) {
-		return "menstrual";
-	}
-	const ovulationDay = Math.max(12, Math.floor(cycleLength / 2));
-	if (cycleDay >= ovulationDay - 1 && cycleDay <= ovulationDay + 1) {
-		return "ovulation";
-	}
-	if (cycleDay < ovulationDay) {
-		return "follicular";
-	}
-	return "luteal";
-};
+export const useCycle = (cycle: Cycle = defaultCycle, logs: PeriodLog[] = []) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-const toDate = (value: string | null) => (value ? new Date(value) : null);
+    // Analyze historical logs to get averages
+    const { avgCycleLength, avgPeriodLength } = analyzeCycles(logs);
 
-const daysBetween = (start: Date, end: Date) => {
-	const startDate = new Date(start);
-	const endDate = new Date(end);
-	const ms =
-		endDate.setHours(0, 0, 0, 0) - startDate.setHours(0, 0, 0, 0);
-	return Math.floor(ms / (1000 * 60 * 60 * 24));
-};
+    const lastPeriod = toDate(cycle.lastPeriodStart);
 
-export const useCycle = (cycle: Cycle = defaultCycle) => {
-	const today = new Date();
-	const lastPeriod = toDate(cycle.lastPeriodStart);
-	const cycleDay = lastPeriod ? daysBetween(lastPeriod, new Date(today)) + 1 : 1;
-	const normalizedDay = ((cycleDay - 1) % cycle.cycleLength) + 1;
-	const daysUntilNextPeriod =
-		cycle.cycleLength - normalizedDay + 1 > 0
-			? cycle.cycleLength - normalizedDay + 1
-			: cycle.cycleLength;
-	const phase = getCyclePhase(
-		normalizedDay,
-		cycle.cycleLength,
-		cycle.periodLength
-	);
+    // Calculate cycle day based on last period start
+    const cycleDay = lastPeriod ? daysBetween(lastPeriod, today) + 1 : 1;
+    const normalizedDay = ((cycleDay - 1) % (cycle.cycleLength || avgCycleLength)) + 1;
 
-	const nextPeriodStart = useMemo(() => {
-		if (!lastPeriod) {
-			return null;
-		}
-		const next = new Date(lastPeriod);
-		next.setDate(next.getDate() + cycle.cycleLength);
-		return next;
-	}, [cycle.cycleLength, lastPeriod]);
+    const daysUntilNextPeriod =
+        (cycle.cycleLength || avgCycleLength) - normalizedDay + 1 > 0
+            ? (cycle.cycleLength || avgCycleLength) - normalizedDay + 1
+            : cycle.cycleLength || avgCycleLength;
 
-	const fertileWindow = useMemo(() => {
-		if (!lastPeriod) {
-			return null;
-		}
-		const ovulation = new Date(lastPeriod);
-		ovulation.setDate(ovulation.getDate() + Math.floor(cycle.cycleLength / 2));
-		const start = new Date(ovulation);
-		start.setDate(start.getDate() - 3);
-		const end = new Date(ovulation);
-		end.setDate(end.getDate() + 1);
-		return { start, end };
-	}, [cycle.cycleLength, lastPeriod]);
+    // Get cycle phase
+    const phase = getCyclePhaseKey(
+        today,
+        lastPeriod,
+        cycle.cycleLength || avgCycleLength,
+        cycle.periodLength || avgPeriodLength
+    );
 
-	return {
-		cycleDay: normalizedDay,
-		phase,
-		daysUntilNextPeriod,
-		nextPeriodStart,
-		fertileWindow,
-	};
+    // Calculate prediction data
+    const cycleData = useMemo(() => {
+        return calculateCycleData(
+            cycle.lastPeriodStart,
+            cycle.cycleLength || avgCycleLength,
+            cycle.periodLength || avgPeriodLength
+        );
+    }, [cycle.lastPeriodStart, cycle.cycleLength, cycle.periodLength, avgCycleLength, avgPeriodLength]);
+
+    const nextPeriodStart = cycleData.nextPeriodStart;
+    const predictedOvulation = cycleData.predictedOvulation;
+
+    const fertileWindow = useMemo(() => {
+        if (!cycleData.fertileWindowStart || !cycleData.fertileWindowEnd) {
+            return null;
+        }
+        return {
+            start: cycleData.fertileWindowStart,
+            end: cycleData.fertileWindowEnd,
+        };
+    }, [cycleData.fertileWindowStart, cycleData.fertileWindowEnd]);
+
+    return {
+        cycleDay: normalizedDay,
+        phase,
+        daysUntilNextPeriod,
+        nextPeriodStart,
+        predictedOvulation,
+        fertileWindow,
+        avgCycleLength,
+        avgPeriodLength,
+        isNewUser: cycleData.isNewUser,
+    };
 };
 
 type PeriodLogState = {
-	logs: PeriodLog[];
-	addLog: (log: Omit<PeriodLog, "id" | "createdAt">) => void;
-	updateLog: (id: string, log: Partial<PeriodLog>) => void;
+    logs: PeriodLog[];
+    addLog: (log: Omit<PeriodLog, "id" | "createdAt">) => void;
+    updateLog: (id: string, log: Partial<PeriodLog>) => void;
 };
 
 export const usePeriodLog = (initialLogs: PeriodLog[] = []): PeriodLogState => {
-	const [logs, setLogs] = useState<PeriodLog[]>(initialLogs);
+    const [logs, setLogs] = useState<PeriodLog[]>(initialLogs);
 
-	const addLog = useCallback(
-		(log: Omit<PeriodLog, "id" | "createdAt">) => {
-			const newLog: PeriodLog = {
-				...log,
-				id: crypto.randomUUID(),
-				createdAt: new Date().toISOString(),
-			};
-			setLogs((prev) => [newLog, ...prev]);
-		},
-		[]
-	);
+    const addLog = useCallback(
+        (log: Omit<PeriodLog, "id" | "createdAt">) => {
+            const newLog: PeriodLog = {
+                ...log,
+                id: crypto.randomUUID(),
+                createdAt: new Date().toISOString(),
+            };
+            setLogs((prev) => [newLog, ...prev]);
+        },
+        []
+    );
 
-	const updateLog = useCallback((id: string, log: Partial<PeriodLog>) => {
-		setLogs((prev) =>
-			prev.map((entry) => (entry.id === id ? { ...entry, ...log } : entry))
-		);
-	}, []);
+    const updateLog = useCallback((id: string, log: Partial<PeriodLog>) => {
+        setLogs((prev) =>
+            prev.map((entry) => (entry.id === id ? { ...entry, ...log } : entry))
+        );
+    }, []);
 
-	return { logs, addLog, updateLog };
+    return { logs, addLog, updateLog };
 };
 
 export const symptomLabels: Record<Symptom, string> = {
-	cramps: "Cramps",
-	headache: "Headache",
-	mood: "Mood swings",
-	energy: "Low energy",
-	bloating: "Bloating",
-	sleep: "Sleep issues",
+    cramps: "Cramps",
+    backPain: "Back Pain",
+    headache: "Headache",
+    bloating: "Bloating",
+    breastTenderness: "Breast Tenderness",
+    fatigue: "Fatigue",
+    irritability: "Irritability",
+    lowFocus: "Low Focus",
 };

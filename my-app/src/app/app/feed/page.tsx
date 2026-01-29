@@ -1,187 +1,836 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { LogActions } from "../../../components/feed/FeedActions";
+import { CycleProgress } from "../../../components/feed/CycleProgress";
+import { SymptomGrid } from "../../../components/feed/SymptomPills";
+import { LogModal } from "../../../components/feed/LogModal";
+import { CycleSettingsModal } from "../../../components/feed/CycleSettingsModal";
 import { CalendarGrid } from "../../../components/feed/SwipeCard";
-import { CycleStatusCard, PredictionCard } from "../../../components/feed/FeedCard";
+import { InsightsSection } from "../../../components/insights/InsightsSection";
+import { CycleStats } from "../../../components/insights/CycleStats";
+import { PDFReportGenerator } from "../../../components/insights/PDFReportGenerator";
 import { BottomNav } from "../../../components/layout/BottomNav";
 import { Header } from "../../../components/layout/Header";
+import { TabNav } from "../../../components/layout/TabNav";
+import { FloatingActionButton } from "../../../components/layout/FloatingActionButton";
 import { Button } from "../../../components/ui/Button";
-import { Input } from "../../../components/ui/Input";
+import { Input, Select } from "../../../components/ui/Input";
+import { WaterTracker } from "../../../components/feed/WaterTracker";
+import { PhaseInsights } from "../../../components/feed/PhaseInsights";
+import { LoggingModal } from "../../../components/feed/LoggingModal";
+import { MonthYearPicker } from "../../../components/feed/MonthYearPicker";
+import { DayPreviewCard } from "../../../components/feed/DayPreviewCard";
 import { useAuth } from "../../../hooks/useAuth";
-import { symptomLabels, useCycle, usePeriodLog } from "../../../hooks/useSwipe";
-import type { PeriodLog, Symptom } from "../../../types/feed";
+import { symptomLabels, useCycle } from "../../../hooks/useSwipe";
+import type {
+    BleedingIntensity,
+    Mood,
+    PeriodLog,
+    Symptom,
+} from "../../../types/feed";
+import {
+    getCycleProfile,
+    getDailyLogs,
+    saveDailyLog,
+    updateCycleProfile,
+    deleteLogById,
+} from "../../../lib/db";
+import {
+    calculateCycleData,
+    getCyclePhase,
+    getCycleDayForDate,
+    getPredictedPeriodDaysForMonth,
+    getFertileDaysForMonth,
+    getOvulationDayForMonth,
+    DEFAULT_CYCLE_LENGTH,
+    DEFAULT_PERIOD_LENGTH,
+} from "../../../lib/predictions";
+
+// ============================================================================
+// CENTRALIZED STATE MANAGEMENT & PERSISTENCE LOGIC
+// ============================================================================
+
+const STORAGE_KEY = "cycle_data_v1";
+
+interface CycleState {
+    cycleLength: number;
+    periodLength: number;
+    lastPeriodStart: string | null;
+}
+
+const loadFromStorage = (): CycleState | null => {
+    if (typeof window === "undefined") return null;
+    try {
+        const stored = localStorage.getItem(STORAGE_KEY);
+        return stored ? JSON.parse(stored) : null;
+    } catch {
+        return null;
+    }
+};
+
+const saveToStorage = (state: CycleState) => {
+    if (typeof window === "undefined") return;
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch {
+        console.error("Failed to save cycle data to localStorage");
+    }
+};
 
 export default function FeedPage() {
-	const { user } = useAuth();
-	const [cycleLength, setCycleLength] = useState(28);
-	const [periodLength, setPeriodLength] = useState(5);
-	const [lastPeriodStart, setLastPeriodStart] = useState<string | null>(null);
-	const [selectedSymptoms, setSelectedSymptoms] = useState<Symptom[]>([]);
-	const [notes, setNotes] = useState("");
-	const { logs, addLog } = usePeriodLog();
+    const { user } = useAuth();
 
-	const cycle = useMemo(
-		() => ({ cycleLength, periodLength, lastPeriodStart }),
-		[cycleLength, periodLength, lastPeriodStart]
-	);
-	const { cycleDay, phase, daysUntilNextPeriod, nextPeriodStart, fertileWindow } =
-		useCycle(cycle);
+    // ========================================================================
+    // MAIN CYCLE STATE
+    // ========================================================================
+    const [cycleLength, setCycleLength] = useState(28);
+    const [periodLength, setPeriodLength] = useState(5);
+    const [lastPeriodStart, setLastPeriodStart] = useState<string | null>(null);
 
-	const handleLogStart = () => {
-		const today = new Date().toISOString().slice(0, 10);
-		setLastPeriodStart(today);
-		addLog({
-			userId: user?.id ?? null,
-			startDate: today,
-			symptoms: selectedSymptoms,
-			notes: notes || undefined,
-		});
-	};
+    // ========================================================================
+    // LOGGING STATE
+    // ========================================================================
+    const [selectedSymptoms, setSelectedSymptoms] = useState<string[]>([]);
+    const [customSymptoms, setCustomSymptoms] = useState<string[]>([]);
+    const [mood, setMood] = useState<Mood>("neutral");
+    const [bleedingIntensity, setBleedingIntensity] =
+        useState<BleedingIntensity>("medium");
+    const [notes, setNotes] = useState("");
+    const [logs, setLogs] = useState<PeriodLog[]>([]);
+    const [logError, setLogError] = useState<string | null>(null);
+    const [successMessage, setSuccessMessage] = useState<string | null>(null);
+    const [isSaving, setIsSaving] = useState(false);
 
-	const handleLogEnd = () => {
-		if (!logs[0]) {
-			return;
-		}
-		const today = new Date().toISOString().slice(0, 10);
-		const lastLog = logs[0] as PeriodLog;
-		addLog({
-			userId: user?.id ?? null,
-			startDate: lastLog.startDate,
-			endDate: today,
-			symptoms: lastLog.symptoms,
-			notes: lastLog.notes,
-		});
-	};
+    // ========================================================================
+    // UI STATE
+    // ========================================================================
+    const [showCycleModal, setShowCycleModal] = useState(false);
+    const [isInitialized, setIsInitialized] = useState(false);
+    const [selectedLogForModal, setSelectedLogForModal] = useState<PeriodLog | null>(null);
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [selectedDate, setSelectedDate] = useState<string | null>(null);
+    const [toastMessage, setToastMessage] = useState<string | null>(null);
+    const [activeTab, setActiveTab] = useState<"today" | "calendar" | "analysis">("today");
+    const [showLoggingModal, setShowLoggingModal] = useState(false);
+    const [showMonthYearPicker, setShowMonthYearPicker] = useState(false);
+    const [currentViewDate, setCurrentViewDate] = useState(() => new Date());
+    const [previewLog, setPreviewLog] = useState<PeriodLog | null>(null);
 
-	const now = new Date();
-	const month = now.getMonth();
-	const year = now.getFullYear();
-	const periodDays = lastPeriodStart
-		? Array.from({ length: periodLength }, (_, i) => {
-				const date = new Date(lastPeriodStart);
-				date.setDate(date.getDate() + i);
-				return date.getMonth() === month ? date.getDate() : -1;
-			}).filter((day) => day > 0)
-		: [];
-	const fertileDays = fertileWindow
-		? Array.from({ length: 5 }, (_, i) => {
-				const date = new Date(fertileWindow.start);
-				date.setDate(date.getDate() + i);
-				return date.getMonth() === month ? date.getDate() : -1;
-			}).filter((day) => day > 0)
-		: [];
+    // COMPUTED VALUES: Cycle Calculations
+    // ========================================================================
+    const cycle = useMemo(
+        () => ({ cycleLength, periodLength, lastPeriodStart }),
+        [cycleLength, periodLength, lastPeriodStart]
+    );
 
-	return (
-		<div className="flex min-h-screen flex-col bg-zinc-50 pb-20">
-			<Header title="Dashboard" subtitle="Your cycle overview" />
-			<main className="mx-auto flex w-full max-w-lg flex-1 flex-col gap-6 px-6 py-6">
-				<CycleStatusCard
-					cycleDay={cycleDay}
-					phase={phase}
-					daysUntilNextPeriod={daysUntilNextPeriod}
-				/>
-				<PredictionCard
-					nextPeriodStart={nextPeriodStart}
-					fertileWindow={fertileWindow}
-				/>
+    const { cycleDay, phase, daysUntilNextPeriod, avgCycleLength, avgPeriodLength, isNewUser } =
+        useCycle(cycle, logs);
 
-				<section id="calendar" className="flex flex-col gap-3">
-					<h2 className="text-base font-semibold text-zinc-900">Calendar</h2>
-					<CalendarGrid
-						month={month}
-						year={year}
-						periodDays={periodDays}
-						fertileDays={fertileDays}
-					/>
-				</section>
+    // ========================================================================
+    // SYNC EFFECT: Load from Supabase on mount, then localStorage as fallback
+    // ========================================================================
+    useEffect(() => {
+        const loadInitialData = async () => {
+            // First, check localStorage for immediate UI update (offline support)
+            const stored = loadFromStorage();
+            if (stored) {
+                setCycleLength(stored.cycleLength);
+                setPeriodLength(stored.periodLength);
+                setLastPeriodStart(stored.lastPeriodStart);
+            }
 
-				<section id="log" className="flex flex-col gap-4">
-					<h2 className="text-base font-semibold text-zinc-900">Log today</h2>
-					<div className="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm">
-						<div className="grid gap-4">
-							<Input
-								label="Notes"
-								placeholder="How are you feeling today?"
-								value={notes}
-								onChange={(event) => setNotes(event.target.value)}
-							/>
-							<div>
-								<p className="text-sm font-medium text-zinc-700">Symptoms</p>
-								<div className="mt-2 grid grid-cols-2 gap-2">
-									{(Object.keys(symptomLabels) as Symptom[]).map((symptom) => {
-										const isSelected = selectedSymptoms.includes(symptom);
-										return (
-											<label
-												key={symptom}
-												className={`flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs transition-colors ${
-													isSelected
-														? "border-emerald-300 bg-emerald-50 text-emerald-700"
-														: "border-zinc-200 text-zinc-600"
-												}`}
-											>
-												<input
-													type="checkbox"
-													checked={isSelected}
-													onChange={() =>
-														setSelectedSymptoms((prev) =>
-															prev.includes(symptom)
-																? prev.filter((item) => item !== symptom)
-																: [...prev, symptom]
-														)
-													}
-													className="h-4 w-4 rounded border-zinc-300 text-emerald-600 focus:ring-emerald-200"
-												/>
-												{symptomLabels[symptom]}
-											</label>
-										);
-									})}
-								</div>
-							</div>
-							<LogActions onStart={handleLogStart} onEnd={handleLogEnd} />
-							<div className="text-xs text-zinc-500">
-								Logs are stored locally for this session.
-							</div>
-						</div>
-					</div>
-				</section>
+            // Then fetch from Supabase if user is authenticated
+            if (user?.id) {
+                try {
+                    const [profile, logData] = await Promise.all([
+                        getCycleProfile(user.id),
+                        getDailyLogs(user.id),
+                    ]);
 
-				<section className="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm">
-					<h2 className="text-base font-semibold text-zinc-900">Cycle settings</h2>
-					<p className="mt-1 text-sm text-zinc-500">
-						Adjust your cycle lengths for more accurate predictions.
-					</p>
-					<div className="mt-4 grid gap-4">
-						<Input
-							label="Cycle length (days)"
-							type="number"
-							min={20}
-							max={45}
-							value={cycleLength}
-							onChange={(event) => setCycleLength(Number(event.target.value))}
-						/>
-						<Input
-							label="Period length (days)"
-							type="number"
-							min={2}
-							max={10}
-							value={periodLength}
-							onChange={(event) => setPeriodLength(Number(event.target.value))}
-						/>
-						<Input
-							label="Last period start"
-							type="date"
-							value={lastPeriodStart ?? ""}
-							onChange={(event) =>
-								setLastPeriodStart(event.target.value || null)
-							}
-						/>
-						<Button variant="secondary">Save preferences</Button>
-					</div>
-				</section>
-			</main>
-			<BottomNav />
-		</div>
-	);
+                    setCycleLength(profile.cycleLength);
+                    setPeriodLength(profile.periodLength);
+                    setLastPeriodStart(profile.lastPeriodStart);
+                    setLogs(logData);
+
+                    // Derive averages from historical logs
+                    const derived = getDerivedCycle(logData);
+                    if (derived.cycleLength) {
+                        setCycleLength(derived.cycleLength);
+                    }
+                    if (derived.periodLength) {
+                        setPeriodLength(derived.periodLength);
+                    }
+                    if (derived.lastPeriodStart) {
+                        setLastPeriodStart(derived.lastPeriodStart);
+                    }
+                } catch (error) {
+                    console.error("Failed to load cycle profile:", error);
+                }
+            }
+
+            setIsInitialized(true);
+        };
+
+        loadInitialData();
+    }, [user?.id]);
+
+    // ========================================================================
+    // SYNC EFFECT: Persist cycle state to localStorage whenever it changes
+    // ========================================================================
+    useEffect(() => {
+        if (isInitialized) {
+            saveToStorage({
+                cycleLength,
+                periodLength,
+                lastPeriodStart,
+            });
+        }
+    }, [cycleLength, periodLength, lastPeriodStart, isInitialized]);
+
+    // ========================================================================
+    // EVENT HANDLERS: Daily Logging
+    // ========================================================================
+    const handleSaveLog = async () => {
+        if (!user?.id) {
+            setLogError("Sign in to save an entry.");
+            return;
+        }
+        setLogError(null);
+        setSuccessMessage(null);
+        setIsSaving(true);
+
+        const dateToSave = selectedDate || new Date().toISOString().slice(0, 10);
+        const { error } = await saveDailyLog(user.id, dateToSave, {
+            mood,
+            bleeding: bleedingIntensity,
+            symptoms: selectedSymptoms,
+            notes: notes || undefined,
+        });
+
+        setIsSaving(false);
+
+        if (error) {
+            setLogError(error);
+            return;
+        }
+
+        // Show success message
+        setSuccessMessage("✓ Entry saved!");
+        setTimeout(() => setSuccessMessage(null), 3000);
+
+        // Reset form
+        setSelectedSymptoms([]);
+        setMood("neutral");
+        setBleedingIntensity("medium");
+        setNotes("");
+        setSelectedDate(null);
+        setSelectedLogForModal(null);
+
+        // Refresh logs from database
+        const updatedLogs = await getDailyLogs(user.id);
+        setLogs(updatedLogs);
+    };
+
+    // ========================================================================
+    // EVENT HANDLERS: Period Start (Update Cycle Profile)
+    // ========================================================================
+    const handleStartPeriod = async () => {
+        if (!user?.id) {
+            setLogError("Sign in to start a period.");
+            return;
+        }
+        setLogError(null);
+        setSuccessMessage(null);
+        setIsSaving(true);
+
+        const today = new Date().toISOString().slice(0, 10);
+        const { error } = await updateCycleProfile(user.id, {
+            cycleLength,
+            periodLength,
+            lastPeriodStart: today,
+        });
+
+        setIsSaving(false);
+
+        if (error) {
+            setLogError(error);
+            return;
+        }
+
+        // Update local state (resets cycle to day 1)
+        setLastPeriodStart(today);
+        setSuccessMessage("✓ Period started!");
+        setTimeout(() => setSuccessMessage(null), 3000);
+    };
+
+    // ========================================================================
+    // EVENT HANDLERS: Cycle Settings
+    // ========================================================================
+    const handleSaveProfile = async (newCycle: typeof cycle) => {
+        if (!user?.id) {
+            return;
+        }
+        setIsSaving(true);
+        try {
+            await updateCycleProfile(user.id, newCycle);
+            // Update local state
+            setCycleLength(newCycle.cycleLength);
+            setPeriodLength(newCycle.periodLength);
+            setLastPeriodStart(newCycle.lastPeriodStart);
+            setShowCycleModal(false);
+        } catch (error) {
+            console.error("Failed to save cycle profile:", error);
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    // ========================================================================
+    // EVENT HANDLERS: Modal & Delete
+    // ========================================================================
+    // ========================================================================
+    // EVENT HANDLERS: Modal & Calendar Interaction
+    // ========================================================================
+    // Calculate cycle day for any given date
+    const calculateCycleDayForDate = (dateStr: string): number => {
+        if (!lastPeriodStart) return 1;
+        const targetDate = new Date(dateStr + "T00:00:00");
+        const lastPeriod = new Date(lastPeriodStart + "T00:00:00");
+        return getCycleDayForDate(
+            targetDate,
+            lastPeriod,
+            avgCycleLength || DEFAULT_CYCLE_LENGTH
+        );
+    };
+
+    const handleCalendarDayClick = (dateStr: string) => {
+        const clickedDate = new Date(dateStr + "T00:00:00");
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        // Check if future date
+        if (clickedDate > today) {
+            setToastMessage("You cannot log symptoms for future dates.");
+            setTimeout(() => setToastMessage(null), 3000);
+            return;
+        }
+
+        setSelectedDate(dateStr);
+        const foundLog = logs.find((log) => log.date === dateStr);
+
+        if (foundLog) {
+            // Show day preview first
+            setPreviewLog(foundLog);
+            setSelectedLogForModal(foundLog);
+        } else {
+            // No log - open empty modal for new entry
+            setPreviewLog(null);
+            setSelectedLogForModal(null);
+            setSelectedSymptoms([]);
+            setMood("neutral");
+            setBleedingIntensity("medium");
+            setNotes("");
+            setShowLoggingModal(true);
+        }
+    };
+
+    const handleDeleteLog = async (logId: string) => {
+        setIsDeleting(true);
+        const { error } = await deleteLogById(logId);
+        setIsDeleting(false);
+
+        if (error) {
+            setLogError(error);
+            return;
+        }
+
+        // Remove from UI immediately
+        setLogs((prev) => prev.filter((log) => log.id !== logId));
+        setSelectedDate(null);
+        setSelectedLogForModal(null);
+        setSuccessMessage("✓ Entry deleted!");
+        setTimeout(() => setSuccessMessage(null), 3000);
+    };
+
+    const handleCloseModal = () => {
+        setSelectedLogForModal(null);
+        setSelectedDate(null);
+    };
+
+    // Dynamically load form data based on selectedDate
+    const currentDate = selectedDate || new Date().toISOString().slice(0, 10);
+    const selectedLogForForm = logs.find((log) => log.date === currentDate);
+
+    // Extract custom symptoms from all logs (symptoms not in the default list)
+    useEffect(() => {
+        const defaultSymptoms = Object.keys(symptomLabels) as Symptom[];
+        const allSymptoms = new Set<string>();
+
+        logs.forEach((log) => {
+            log.symptoms?.forEach((symptom) => {
+                if (!defaultSymptoms.includes(symptom as Symptom)) {
+                    allSymptoms.add(symptom);
+                }
+            });
+        });
+
+        setCustomSymptoms(Array.from(allSymptoms));
+    }, [logs]);
+
+    // Load form with existing data if available
+    useEffect(() => {
+        if (selectedLogForForm && selectedDate) {
+            setSelectedSymptoms(selectedLogForForm.symptoms || []);
+            setMood(selectedLogForForm.mood || "neutral");
+            setBleedingIntensity(selectedLogForForm.bleedingIntensity || "medium");
+            setNotes(selectedLogForForm.notes || "");
+        }
+    }, [selectedDate, selectedLogForForm]);
+
+    const handleAddCustomSymptom = (symptom: string) => {
+        if (!customSymptoms.includes(symptom)) {
+            setCustomSymptoms((prev) => [...prev, symptom]);
+        }
+        // Automatically select the newly added custom symptom
+        if (!selectedSymptoms.includes(symptom)) {
+            setSelectedSymptoms((prev) => [...prev, symptom]);
+        }
+    };
+
+    // ========================================================================
+    // EVENT HANDLERS: Calendar Navigation
+    // ========================================================================
+    const handlePreviousMonth = () => {
+        setCurrentViewDate((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
+    };
+
+    const handleNextMonth = () => {
+        setCurrentViewDate((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
+    };
+
+    const handleBackToToday = () => {
+        setCurrentViewDate(new Date());
+    };
+
+    const handleMonthYearSelect = (month: number, year: number) => {
+        setCurrentViewDate(new Date(year, month, 1));
+    };
+
+    const handleEditFromPreview = () => {
+        if (previewLog) {
+            // Load the log data into form state
+            setSelectedSymptoms(previewLog.symptoms || []);
+            setMood(previewLog.mood || "neutral");
+            setBleedingIntensity(previewLog.bleedingIntensity || "medium");
+            setNotes(previewLog.notes || "");
+            setSelectedLogForModal(previewLog);
+            setPreviewLog(null);
+            setShowLoggingModal(true);
+        }
+    };
+
+    // ========================================================================
+
+    // ========================================================================
+    // HELPER: Calendar visualization (uses dynamic month/year state)
+    // ========================================================================
+    const month = currentViewDate.getMonth();
+    const year = currentViewDate.getFullYear();
+
+    // Use prediction engine for calendar visualization
+    const cycleData = calculateCycleData(
+        lastPeriodStart,
+        avgCycleLength || DEFAULT_CYCLE_LENGTH,
+        avgPeriodLength || DEFAULT_PERIOD_LENGTH
+    );
+
+    const lastPeriodDate = lastPeriodStart ? new Date(lastPeriodStart + "T00:00:00") : null;
+    const currentPhaseLabel = getCyclePhase(
+        new Date(),
+        lastPeriodDate,
+        avgCycleLength || DEFAULT_CYCLE_LENGTH,
+        avgPeriodLength || DEFAULT_PERIOD_LENGTH
+    );
+
+    const estimateStart = new Date();
+    const estimateStartStr = estimateStart.toISOString().slice(0, 10);
+    const calendarCycleData = lastPeriodStart
+        ? cycleData
+        : calculateCycleData(estimateStartStr, DEFAULT_CYCLE_LENGTH, DEFAULT_PERIOD_LENGTH);
+
+    const calendarPeriodLength = lastPeriodStart
+        ? avgPeriodLength || DEFAULT_PERIOD_LENGTH
+        : DEFAULT_PERIOD_LENGTH;
+
+    const predictedPeriodDays = getPredictedPeriodDaysForMonth(
+        month,
+        year,
+        calendarCycleData.nextPeriodStart,
+        calendarPeriodLength
+    );
+
+    const fertileDays = getFertileDaysForMonth(
+        month,
+        year,
+        calendarCycleData.fertileWindowStart,
+        calendarCycleData.fertileWindowEnd
+    );
+
+    const ovulationDay = getOvulationDayForMonth(month, year, calendarCycleData.predictedOvulation);
+
+    // ========================================================================
+    // LOADING STATE
+    // ========================================================================
+    if (!isInitialized) {
+        return (
+            <div className="flex min-h-screen items-center justify-center bg-zinc-50">
+                <div className="text-center">
+                    <div className="mb-4 inline-block h-8 w-8 animate-spin rounded-full border-4 border-zinc-300 border-t-zinc-900"></div>
+                    <p className="text-sm text-zinc-600">Loading your cycle...</p>
+                </div>
+            </div>
+        );
+    }
+
+    // ========================================================================
+    // RENDER: Dashboard UI with Tabbed Navigation
+    // ========================================================================
+    const handleFabClick = () => {
+        setActiveTab("today");
+        setSelectedDate(null);
+        setSelectedSymptoms([]);
+        setMood("neutral");
+        setBleedingIntensity("medium");
+        setNotes("");
+        setSelectedLogForModal(null);
+        setShowLoggingModal(true);
+    };
+
+    return (
+        <div className="flex min-h-screen flex-col bg-gradient-to-br from-zinc-50 via-white to-zinc-50 pb-24">
+            <Header
+                title="Your Cycle"
+                subtitle={`Day ${cycleDay} of ${cycleLength}`}
+                action={
+                    <button
+                        onClick={() => setShowCycleModal(true)}
+                        className="rounded-full p-2 transition-colors hover:bg-zinc-100 active:scale-95"
+                        title="Cycle settings"
+                        aria-label="Open cycle settings"
+                    >
+                        ⚙️
+                    </button>
+                }
+            />
+
+            {/* Tab Navigation */}
+            <TabNav
+                tabs={[
+                        { id: "today", label: "Today", icon: "📝" },
+                        { id: "calendar", label: "Calendar", icon: "📅" },
+                        { id: "analysis", label: "Analysis", icon: "📊" },
+                ]}
+                activeTab={activeTab}
+                onTabChange={(tabId) => setActiveTab(tabId as any)}
+            />
+
+            <main className="mx-auto flex w-full max-w-lg flex-1 flex-col gap-4 px-4 py-4 sm:px-6">
+                {/* ================================================================ */}
+                {/* TAB: TODAY */}
+                {/* ================================================================ */}
+                {activeTab === "today" && (
+                    <>
+                        <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3 shadow-sm">
+                            <div className="flex items-center justify-between">
+                                <span className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Current Phase</span>
+                                <span className="rounded-full bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-700">
+                                    {currentPhaseLabel}
+                                </span>
+                            </div>
+                        </div>
+
+                        {/* Cycle Progress Circle */}
+                        <CycleProgress
+                            cycleDay={cycleDay}
+                            cycleLength={cycleLength}
+                            phase={phase}
+                            daysUntilNextPeriod={daysUntilNextPeriod}
+                        />
+
+                        {/* Phase Insights */}
+                        <PhaseInsights phase={phase} cycleDay={cycleDay} />
+
+                        {/* Water Tracker */}
+                        <WaterTracker />
+
+                        {/* Log Today's Symptoms Button */}
+                        <div className="mx-auto mt-6 mb-6">
+                            <button
+                                onClick={() => {
+                                    setSelectedDate(null);
+                                    setSelectedSymptoms([]);
+                                    setMood("neutral");
+                                    setBleedingIntensity("medium");
+                                    setNotes("");
+                                    setSelectedLogForModal(null);
+                                    setShowLoggingModal(true);
+                                }}
+                                className="w-full rounded-3xl bg-gradient-to-r from-emerald-500 to-emerald-600 px-8 py-4 text-white font-bold text-lg hover:from-emerald-600 hover:to-emerald-700 shadow-lg transition-all"
+                            >
+                                📝 Log Today's Symptoms
+                            </button>
+                        </div>
+                    </>
+                )}
+
+                {/* ================================================================ */}
+                {/* TAB: CALENDAR */}
+                {/* ================================================================ */}
+                {activeTab === "calendar" && (
+                    <>
+                        {isNewUser && (
+                            <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+                                <p className="text-sm font-semibold text-amber-900">
+                                    Log your first period to unlock personalized predictions!
+                                </p>
+                                <button
+                                    onClick={() => setShowCycleModal(true)}
+                                    className="mt-3 inline-flex items-center justify-center rounded-2xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-amber-700 transition-colors"
+                                >
+                                    Set your last period
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Predictions */}
+                        <div className="grid gap-3 sm:grid-cols-2">
+                            <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
+                                <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">
+                                    Next Period
+                                </p>
+                                <div className="mt-2">
+                                    {lastPeriodStart && cycleData.nextPeriodStart ? (
+                                        <p className="text-lg font-semibold text-zinc-900">
+                                            {cycleData.nextPeriodStart.toLocaleDateString("en-US", {
+                                                month: "short",
+                                                day: "numeric",
+                                            })}
+                                        </p>
+                                    ) : (
+                                        <button
+                                            onClick={() => setShowCycleModal(true)}
+                                            className="rounded-xl bg-rose-500 px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-rose-600 transition-colors"
+                                        >
+                                            Set your last period
+                                        </button>
+                                    )}
+                                </div>
+                                <p className="mt-1 text-xs text-zinc-500">
+                                    {lastPeriodStart
+                                        ? daysUntilNextPeriod > 0
+                                            ? `in ${daysUntilNextPeriod}d`
+                                            : "soon"
+                                        : "Add your history to personalize"}
+                                </p>
+                            </div>
+
+                            <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
+                                <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">
+                                    Fertile
+                                </p>
+                                <div className="mt-2">
+                                    {lastPeriodStart && cycleData.fertileWindowStart && cycleData.fertileWindowEnd ? (
+                                        <p className="text-lg font-semibold text-zinc-900">
+                                            {`${cycleData.fertileWindowStart.getDate()} - ${cycleData.fertileWindowEnd.getDate()}`}
+                                        </p>
+                                    ) : (
+                                        <button
+                                            onClick={() => setShowCycleModal(true)}
+                                            className="rounded-xl bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-600 transition-colors"
+                                        >
+                                            Set your last period
+                                        </button>
+                                    )}
+                                </div>
+                                <p className="mt-1 text-xs text-zinc-500">
+                                    {lastPeriodStart ? "window" : "Add your history to personalize"}
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Calendar */}
+                        <CalendarGrid
+                            month={month}
+                            year={year}
+                            predictedPeriodDays={predictedPeriodDays}
+                            fertileDays={fertileDays}
+                            ovulationDay={ovulationDay}
+                            logs={logs}
+                            selectedDate={selectedDate}
+                            onClickDay={handleCalendarDayClick}
+                            onPreviousMonth={handlePreviousMonth}
+                            onNextMonth={handleNextMonth}
+                            onBackToToday={handleBackToToday}
+                            onOpenMonthYearPicker={() => setShowMonthYearPicker(true)}
+                        />
+
+                        {isNewUser && (
+                            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                                Theoretical Cycle (Estimate)
+                            </div>
+                        )}
+
+                        {/* Day Preview Card */}
+                        {previewLog && selectedDate && (
+                            <DayPreviewCard
+                                log={previewLog}
+                                cycleDay={calculateCycleDayForDate(selectedDate)}
+                                onEdit={handleEditFromPreview}
+                                onDelete={() => {
+                                    handleDeleteLog(previewLog.id);
+                                    setPreviewLog(null);
+                                    setSelectedDate(null);
+                                }}
+                            />
+                        )}
+                    </>
+                )}
+
+                {/* ================================================================ */}
+                {/* TAB: ANALYSIS */}
+                {/* ================================================================ */}
+                {activeTab === "analysis" && (
+                    <>
+                        <CycleStats
+                            logs={logs}
+                            cycleLength={cycleLength}
+                            periodLength={periodLength}
+                        />
+                        <InsightsSection logs={logs} />
+                        <PDFReportGenerator
+                            logs={logs}
+                            cycleLength={cycleLength}
+                            periodLength={periodLength}
+                            lastPeriodStart={lastPeriodStart}
+                            userName={user?.email || "Patient"}
+                        />
+                    </>
+                )}
+            </main>
+
+            {/* ================================================================ */}
+            {/* Floating Action Button */}
+            {/* ================================================================ */}
+            {activeTab !== "today" && (
+                <FloatingActionButton onClick={handleFabClick} />
+            )}
+
+            {/* ================================================================ */}
+            {/* MODAL: Cycle Settings */}
+            {/* ================================================================ */}
+            <CycleSettingsModal
+                open={showCycleModal}
+                cycle={{ cycleLength, periodLength, lastPeriodStart }}
+                onClose={() => setShowCycleModal(false)}
+                onSave={handleSaveProfile}
+                isSaving={isSaving}
+            />
+
+            {/* ================================================================ */}
+            {/* MODAL: Log Details & Delete */}
+            {/* ================================================================ */}
+            <LogModal
+                open={selectedDate !== null}
+                log={selectedLogForModal}
+                selectedDate={selectedDate || ""}
+                onClose={handleCloseModal}
+                onDelete={handleDeleteLog}
+                isDeleting={isDeleting}
+                hasExistingLog={selectedLogForModal !== null}
+            />
+
+            {/* ================================================================ */}
+            {/* TOAST: Feedback Messages */}
+            {/* ================================================================ */}
+            {toastMessage && (
+                <div className="fixed top-4 right-4 z-50 animate-in fade-in slide-in-from-top-2 duration-300">
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 shadow-lg">
+                        <p className="text-sm font-medium text-amber-900">{toastMessage}</p>
+                    </div>
+                </div>
+            )}
+
+            {/* ================================================================ */}
+            {/* ================================================================ */}
+            {/* MODAL: Month/Year Picker */}
+            {/* ================================================================ */}
+            <MonthYearPicker
+                open={showMonthYearPicker}
+                onClose={() => setShowMonthYearPicker(false)}
+                currentMonth={currentViewDate.getMonth()}
+                currentYear={currentViewDate.getFullYear()}
+                onSelect={handleMonthYearSelect}
+            />
+
+            {/* ================================================================ */}
+            {/* LOGGING MODAL: Bottom Sheet */}
+            {/* ================================================================ */}
+            <LoggingModal
+                open={showLoggingModal}
+                onClose={() => setShowLoggingModal(false)}
+                onSave={handleSaveLog}
+                isSaving={isSaving}
+                selectedDate={selectedDate || new Date().toISOString().slice(0, 10)}
+                logError={logError}
+                successMessage={successMessage}
+                mood={mood}
+                setMood={setMood}
+                bleedingIntensity={bleedingIntensity}
+                setBleedingIntensity={setBleedingIntensity}
+                notes={notes}
+                setNotes={setNotes}
+                selectedSymptoms={selectedSymptoms}
+                setSelectedSymptoms={setSelectedSymptoms}
+                customSymptoms={customSymptoms}
+                onAddCustom={handleAddCustomSymptom}
+                existingLog={selectedLogForModal}
+            />
+
+            {/* ================================================================ */}
+            {/* NAVIGATION: Bottom Tab Bar */}
+            {/* ================================================================ */}
+            <BottomNav />
+        </div>
+    );
 }
+
+// ============================================================================
+// HELPER FUNCTIONS: Date & Cycle Calculations
+// ============================================================================
+
+const parseDate = (value: string) => new Date(`${value}T00:00:00`);
+
+const daysBetween = (start: Date, end: Date) => {
+    const ms =
+        end.setHours(0, 0, 0, 0) - start.setHours(0, 0, 0, 0);
+    return Math.floor(ms / (1000 * 60 * 60 * 24));
+};
+
+const getDerivedCycle = (logs: PeriodLog[]) => {
+    if (!logs.length) {
+        return { cycleLength: null, periodLength: null, lastPeriodStart: null };
+    }
+
+    // With new schema, logs have 'date' field instead of 'startDate'
+    const sorted = [...logs].sort((a, b) =>
+        new Date(b.date || "").getTime() - new Date(a.date || "").getTime()
+    );
+
+    const lastLog = sorted[0];
+    return {
+        cycleLength: null,
+        periodLength: null,
+        lastPeriodStart: lastLog.date,
+    };
+};
