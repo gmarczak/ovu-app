@@ -1,0 +1,14 @@
+{
+  "name": "ovu-app",
+  "private": true,
+  "workspaces": [
+    "my-app"
+  ],
+  "scripts": {
+    "dev": "npm --prefix my-app run dev",
+    "build": "npm --prefix my-app run build",
+    "start": "npm --prefix my-app run start",
+    "lint": "npm --prefix my-app run lint",
+    "postinstall": "npm --prefix my-app install"
+  }
+}
