@@ -1,6 +1,6 @@
 "use client";
 
-import { Star } from "lucide-react";
+import { Star, ChevronLeft, ChevronRight } from "lucide-react";
 import type { PeriodLog } from "../../types/feed";
 
 type DayCellProps = {
@@ -32,14 +32,14 @@ export const DayCell = ({
     const tone = isDisabled || !onClickDay
         ? "text-zinc-300 cursor-not-allowed"
         : "text-zinc-700 hover:bg-zinc-100 cursor-pointer";
-    
+
     // Period styling: rose-500 for logged, rose-100 for predicted
     const period = isPeriod
         ? "bg-rose-500 text-white font-bold"
         : isPeriodPredicted
-        ? "bg-rose-100 text-rose-700"
-        : "";
-    
+            ? "bg-rose-100 text-rose-700"
+            : "";
+
     const fertile = isFertile ? "bg-emerald-100 text-emerald-700" : "";
     const today = isToday ? "ring-2 ring-zinc-900/20" : "";
     const selected = isSelected ? "ring-2 ring-indigo-500 bg-indigo-50" : "";
@@ -144,15 +144,15 @@ export const CalendarGrid = ({
                 <div className="flex items-center justify-between">
                     <button
                         onClick={onPreviousMonth}
-                        className="rounded-lg bg-zinc-100 p-2 hover:bg-zinc-200 transition-colors"
+                        className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-zinc-700 transition-colors hover:bg-rose-100"
                         title="Previous month"
                         aria-label="Previous month"
                     >
-                        ‹
+                        <ChevronLeft className="h-5 w-5" />
                     </button>
                     <button
                         onClick={onOpenMonthYearPicker}
-                        className="text-base font-semibold text-zinc-900 min-w-[160px] text-center hover:text-indigo-600 transition-colors"
+                        className="text-base font-semibold text-zinc-900 min-w-[160px] text-center hover:text-rose-600 transition-colors"
                         title="Jump to month"
                         type="button"
                     >
@@ -160,11 +160,11 @@ export const CalendarGrid = ({
                     </button>
                     <button
                         onClick={onNextMonth}
-                        className="rounded-lg bg-zinc-100 p-2 hover:bg-zinc-200 transition-colors"
+                        className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-zinc-700 transition-colors hover:bg-rose-100"
                         title="Next month"
                         aria-label="Next month"
                     >
-                        ›
+                        <ChevronRight className="h-5 w-5" />
                     </button>
                 </div>
 

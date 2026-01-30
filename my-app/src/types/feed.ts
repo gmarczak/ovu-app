@@ -22,7 +22,7 @@ export type Symptom =
 
 export type Mood = "bad" | "neutral" | "good";
 
-export type BleedingIntensity = "light" | "medium" | "heavy";
+export type BleedingIntensity = "none" | "light" | "medium" | "heavy";
 
 export type PeriodLog = {
     id: string;
@@ -31,6 +31,7 @@ export type PeriodLog = {
     symptoms?: string[] | null;
     bleedingIntensity?: BleedingIntensity | null;
     mood?: Mood | null;
+    waterIntake?: number | null;
     notes?: string | null;
     createdAt?: string | null;
 };

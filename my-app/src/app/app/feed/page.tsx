@@ -96,6 +96,7 @@ export default function FeedPage() {
     const [mood, setMood] = useState<Mood>("neutral");
     const [bleedingIntensity, setBleedingIntensity] =
         useState<BleedingIntensity>("medium");
+    const [waterIntake, setWaterIntake] = useState<number>(0);
     const [notes, setNotes] = useState("");
     const [logs, setLogs] = useState<PeriodLog[]>([]);
     const [logError, setLogError] = useState<string | null>(null);
@@ -200,12 +201,15 @@ export default function FeedPage() {
         setSuccessMessage(null);
         setIsSaving(true);
 
+        const bleedingValue = bleedingIntensity === "none" ? "none" : bleedingIntensity;
+
         const dateToSave = selectedDate || new Date().toISOString().slice(0, 10);
         const { error } = await saveDailyLog(user.id, dateToSave, {
             mood,
-            bleeding: bleedingIntensity,
+            bleeding: bleedingValue,
             symptoms: selectedSymptoms,
             notes: notes || undefined,
+            waterIntake: waterIntake > 0 ? waterIntake : undefined,
         });
 
         setIsSaving(false);
@@ -223,6 +227,7 @@ export default function FeedPage() {
         setSelectedSymptoms([]);
         setMood("neutral");
         setBleedingIntensity("medium");
+        setWaterIntake(0);
         setNotes("");
         setSelectedDate(null);
         setSelectedLogForModal(null);
@@ -230,6 +235,32 @@ export default function FeedPage() {
         // Refresh logs from database
         const updatedLogs = await getDailyLogs(user.id);
         setLogs(updatedLogs);
+    };
+
+    const handleWaterIntakeUpdate = async (count: number) => {
+        setWaterIntake(count);
+
+        if (!user?.id) {
+            return;
+        }
+
+        const dateToSave = selectedDate || new Date().toISOString().slice(0, 10);
+
+        try {
+            const { error } = await saveDailyLog(user.id, dateToSave, {
+                mood,
+                bleeding: bleedingIntensity === "none" ? "none" : bleedingIntensity,
+                symptoms: selectedSymptoms,
+                notes: notes || undefined,
+                waterIntake: count,
+            });
+
+            if (error) {
+                console.error("Water intake sync failed:", error);
+            }
+        } catch (error) {
+            console.error("Water intake schema error:", error);
+        }
     };
 
     // ========================================================================
@@ -384,6 +415,7 @@ export default function FeedPage() {
             setSelectedSymptoms(selectedLogForForm.symptoms || []);
             setMood(selectedLogForForm.mood || "neutral");
             setBleedingIntensity(selectedLogForForm.bleedingIntensity || "medium");
+            setWaterIntake(selectedLogForForm.waterIntake || 0);
             setNotes(selectedLogForForm.notes || "");
         }
     }, [selectedDate, selectedLogForForm]);
@@ -527,61 +559,61 @@ export default function FeedPage() {
             {/* Tab Navigation */}
             <TabNav
                 tabs={[
-                        { id: "today", label: "Today", icon: "📝" },
-                        { id: "calendar", label: "Calendar", icon: "📅" },
-                        { id: "analysis", label: "Analysis", icon: "📊" },
+                    { id: "today", label: "Today", icon: "📝" },
+                    { id: "calendar", label: "Calendar", icon: "📅" },
+                    { id: "analysis", label: "Analysis", icon: "📊" },
                 ]}
                 activeTab={activeTab}
                 onTabChange={(tabId) => setActiveTab(tabId as any)}
             />
 
-            <main className="mx-auto flex w-full max-w-lg flex-1 flex-col gap-4 px-4 py-4 sm:px-6">
+            <main className="mx-auto flex w-full max-w-lg flex-1 flex-col px-4 py-3 sm:px-6 overflow-hidden">
                 {/* ================================================================ */}
-                {/* TAB: TODAY */}
+                {/* TAB: TODAY - 100% STATIC ZERO-SCROLL LAYOUT */}
                 {/* ================================================================ */}
                 {activeTab === "today" && (
-                    <>
-                        <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3 shadow-sm">
-                            <div className="flex items-center justify-between">
-                                <span className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Current Phase</span>
-                                <span className="rounded-full bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-700">
-                                    {currentPhaseLabel}
-                                </span>
+                    <div className="flex h-[calc(100vh-theme(spacing.32))] w-full flex-col justify-start overflow-hidden touch-none gap-y-3.5">
+                        {/* TOP GROUP: Cycle Card + Insights Card */}
+                        <div className="flex flex-col gap-3.5 w-full">
+                            {/* Cycle Progress Card - Full Width */}
+                            <div className="w-full rounded-3xl border border-zinc-200 bg-gradient-to-br from-rose-50 to-white p-4 shadow-sm">
+                                <div className="flex flex-col items-center justify-center w-full">
+                                    <CycleProgress
+                                        cycleDay={cycleDay}
+                                        cycleLength={cycleLength}
+                                        phase={phase}
+                                        daysUntilNextPeriod={daysUntilNextPeriod}
+                                    />
+                                </div>
                             </div>
+
+                            {/* Phase Insights Card - Full Width */}
+                            <PhaseInsights phase={phase} cycleDay={cycleDay} />
                         </div>
 
-                        {/* Cycle Progress Circle */}
-                        <CycleProgress
-                            cycleDay={cycleDay}
-                            cycleLength={cycleLength}
-                            phase={phase}
-                            daysUntilNextPeriod={daysUntilNextPeriod}
-                        />
+                        {/* BOTTOM GROUP: Water Card + Log Button */}
+                        <div className="flex flex-col gap-3.5 w-full">
+                            {/* Water Tracker - Full Width */}
+                            <WaterTracker initialCount={waterIntake} onUpdate={handleWaterIntakeUpdate} />
 
-                        {/* Phase Insights */}
-                        <PhaseInsights phase={phase} cycleDay={cycleDay} />
-
-                        {/* Water Tracker */}
-                        <WaterTracker />
-
-                        {/* Log Today's Symptoms Button */}
-                        <div className="mx-auto mt-6 mb-6">
+                            {/* Log Today's Symptoms Button */}
                             <button
                                 onClick={() => {
                                     setSelectedDate(null);
                                     setSelectedSymptoms([]);
                                     setMood("neutral");
                                     setBleedingIntensity("medium");
+                                    setWaterIntake(0);
                                     setNotes("");
                                     setSelectedLogForModal(null);
                                     setShowLoggingModal(true);
                                 }}
-                                className="w-full rounded-3xl bg-gradient-to-r from-emerald-500 to-emerald-600 px-8 py-4 text-white font-bold text-lg hover:from-emerald-600 hover:to-emerald-700 shadow-lg transition-all"
+                                className="w-full rounded-full bg-rose-500 px-6 py-3 text-white font-semibold text-sm hover:bg-rose-600 shadow-lg transition-all active:scale-95"
                             >
                                 📝 Log Today's Symptoms
                             </button>
                         </div>
-                    </>
+                    </div>
                 )}
 
                 {/* ================================================================ */}

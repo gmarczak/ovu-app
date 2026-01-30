@@ -30,15 +30,13 @@ export default function SettingsPage() {
 						</div>
 						<button
 							type="button"
-							className={`relative h-7 w-12 rounded-full transition-colors ${
-								notificationsEnabled ? "bg-emerald-500" : "bg-zinc-300"
-							}`}
+							className={`relative h-7 w-12 rounded-full transition-colors ${notificationsEnabled ? "bg-emerald-500" : "bg-zinc-300"
+								}`}
 							onClick={() => setNotificationsEnabled((prev) => !prev)}
 						>
 							<span
-								className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${
-									notificationsEnabled ? "translate-x-5" : "translate-x-1"
-								}`}
+								className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${notificationsEnabled ? "translate-x-5" : "translate-x-1"
+									}`}
 							/>
 						</button>
 					</div>

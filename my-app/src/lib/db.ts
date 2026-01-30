@@ -16,7 +16,7 @@ export const getCycleProfile = async (userId?: string): Promise<Cycle> => {
     const supabase = getSupabaseClient();
     const { data, error } = await supabase
         .from("cycles")
-        .select("cycle_length, period_length, last_period_start")
+        .select("cycle_length, period_length, lastperiodstart")
         .eq("user_id", userId)
         .maybeSingle();
 
@@ -27,7 +27,7 @@ export const getCycleProfile = async (userId?: string): Promise<Cycle> => {
     return {
         cycleLength: data.cycle_length ?? defaultCycle.cycleLength,
         periodLength: data.period_length ?? defaultCycle.periodLength,
-        lastPeriodStart: data.last_period_start ?? null,
+        lastPeriodStart: (data.lastperiodstart as string) ?? null,
     };
 };
 
@@ -40,17 +40,13 @@ export const updateCycleProfile = async (
         user_id: userId,
         cycle_length: cycle.cycleLength,
         period_length: cycle.periodLength,
-        last_period_start: cycle.lastPeriodStart,
+        lastperiodstart: cycle.lastPeriodStart,
     });
 
     return { error: error?.message ?? null };
 };
 
-export const getPeriodLogs = async (userId?: string): Promise<PeriodLog[]> => {
-    if (!userId) {
-        return [];
-    }
-
+export const getPeriodLogs = async (userId: string): Promise<PeriodLog[]> => {
     const supabase = getSupabaseClient();
     const { data, error } = await supabase
         .from("period_logs")
@@ -105,6 +101,7 @@ export const saveDailyLog = async (
         bleeding?: BleedingIntensity;
         symptoms?: string[];
         notes?: string;
+        waterIntake?: number;
     }
 ): Promise<{ error: string | null }> => {
     const supabase = getSupabaseClient();
@@ -119,9 +116,11 @@ export const saveDailyLog = async (
                 bleeding: logData.bleeding ?? null,
                 symptoms: logData.symptoms ?? [],
                 notes: logData.notes ?? null,
+                water_intake: logData.waterIntake ?? null,
             },
             { onConflict: "user_id,date" }
-        );
+        )
+        .select("id");
 
     if (error) {
         console.error("Error saving daily log:", error);
@@ -139,7 +138,7 @@ export const getDailyLogs = async (userId?: string): Promise<PeriodLog[]> => {
     const supabase = getSupabaseClient();
     const { data, error } = await supabase
         .from("period_logs")
-        .select("id, user_id, date, mood, bleeding, symptoms, notes, created_at")
+        .select("id, user_id, date, mood, bleeding, symptoms, notes, water_intake, created_at")
         .eq("user_id", userId)
         .order("date", { ascending: false });
 
@@ -155,6 +154,7 @@ export const getDailyLogs = async (userId?: string): Promise<PeriodLog[]> => {
         symptoms: (row.symptoms as Symptom[]) ?? [],
         bleedingIntensity: (row.bleeding as BleedingIntensity) ?? null,
         mood: (row.mood as Mood) ?? null,
+        waterIntake: (row.water_intake as number | null) ?? null,
         notes: row.notes ?? null,
         createdAt: row.created_at ?? null,
     }));

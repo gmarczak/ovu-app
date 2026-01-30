@@ -46,21 +46,21 @@ export const CycleProgress = ({
     daysUntilNextPeriod,
 }: CycleProgressProps) => {
     const progress = (cycleDay / cycleLength) * 100;
-    const radius = 70;
+    const radius = 55; // Reduced from 70
     const circumference = 2 * Math.PI * radius;
     const strokeDashoffset = circumference - (progress / 100) * circumference;
 
     const colors = phaseColors[phase];
 
     return (
-        <div className={`flex flex-col items-center justify-center gap-6 rounded-3xl bg-gradient-to-br ${colors.bg} p-8 shadow-sm`}>
-            {/* Circular Progress */}
+        <div className="flex flex-col items-center justify-center gap-3 w-full">
+            {/* Circular Progress - Smaller */}
             <div className="relative flex items-center justify-center">
-                <svg width="160" height="160" className="transform -rotate-90">
+                <svg width="130" height="130" className="transform -rotate-90">
                     {/* Background circle */}
                     <circle
-                        cx="80"
-                        cy="80"
+                        cx="65"
+                        cy="65"
                         r={radius}
                         fill="none"
                         stroke="rgba(0,0,0,0.05)"
@@ -68,8 +68,8 @@ export const CycleProgress = ({
                     />
                     {/* Progress circle */}
                     <circle
-                        cx="80"
-                        cy="80"
+                        cx="65"
+                        cy="65"
                         r={radius}
                         fill="none"
                         stroke="currentColor"
@@ -81,23 +81,23 @@ export const CycleProgress = ({
                         style={{ transition: "stroke-dashoffset 0.5s ease" }}
                     />
                 </svg>
-                {/* Center content */}
-                <div className="absolute flex flex-col items-center justify-center gap-1">
-                    <div className="text-5xl font-bold text-zinc-900">{cycleDay}</div>
+                {/* Center content - Smaller font */}
+                <div className="absolute flex flex-col items-center justify-center gap-0.5">
+                    <div className="text-4xl font-bold text-zinc-900">{cycleDay}</div>
                     <div className="text-xs font-medium text-zinc-600">
                         of {cycleLength} days
                     </div>
                 </div>
             </div>
 
-            {/* Phase info */}
-            <div className="flex flex-col items-center gap-3">
-                <div className={`rounded-full ${colors.ring} px-4 py-1.5 text-sm font-semibold ${colors.accent}`}>
+            {/* Phase badge - Directly under cycle wheel for centered focal point */}
+            <div className="flex flex-col items-center gap-2.5">
+                <div className={`rounded-full ${colors.ring} px-4 py-1.5 text-xs font-semibold ${colors.accent}`}>
                     {phaseLabels[phase]}
                 </div>
-                <p className="text-center text-sm text-zinc-600">
+                <p className="text-center text-xs text-zinc-600 leading-snug max-w-xs">
                     {daysUntilNextPeriod === 1
-                        ? "Next period expected tomorrow"
+                        ? "Next period tomorrow"
                         : `Next period in ${daysUntilNextPeriod} days`}
                 </p>
             </div>
